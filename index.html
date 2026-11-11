@@ -242,7 +242,7 @@ function buildTiles(){
 }
 
 /* ---------- state ---------- */
-const S={mode:'explore',flags:{talked:false,cell:false,lockerOpen:false,powered:false,dest:null},
+const S={mode:'explore',flags:{talked:false,cell:false,lockerOpen:false,powered:false,dest:null,scans:{},log:[]},
   p:{x:3*T+16,y:5*T+24,dir:'down',fr:0,ft:0,moving:false},
   verb:'look',hi:null,scene:'cabin',sm:{level:'sector',sys:0,sel:0,z:0,m:[1,0,0,0,1,0,0,0,1]},fade:0,fadeDir:0,fadeFn:null,doorCool:0,termT:0,kp:{d:[0,0,0,0],sel:0},focus:0};
 let dlg=null;
@@ -264,7 +264,7 @@ $('snd').addEventListener('click',()=>{
 });
 
 /* ---------- text window ---------- */
-function say(lines,cb){dlg={lines,i:0,n:0,cb:cb||null};S.hi=null;paintDlg();}
+function say(lines,cb,esc){dlg={lines,i:0,n:0,cb:cb||null,esc:!!esc};S.hi=null;paintDlg();}
 function paintDlg(){
   const [who,text]=dlg.lines[dlg.i];
   elWho.textContent=who||'';elLine.className='tw-line';elLine.textContent=text.slice(0,Math.floor(dlg.n));
@@ -309,12 +309,13 @@ function refreshUI(){
     elMenu.innerHTML=h;
   }else if(S.mode==='starmap'){
     const sm=S.sm,dest=S.flags.dest;elLine.className='tw-line';elLine.style.minHeight='0';elMenu.className='tw-menu';
-    if(sm.level==='sector'){const i=sm.sel,st=STARS[i];elWho.textContent=st.n;
-      elLine.textContent=(i?smDist(i)+' light years out. ':'The Ironmonger is holding here. ')+st.d+(dest&&dest[0]===i?' The deployment target is in this system.':'');
-      elMenu.innerHTML='<button data-sm="go">Enter system</button><button data-sm="back">Back to the bridge</button>';
-    }else{const b=BOD[sm.sys][sm.sel];elWho.textContent=b.n+' · '+KIND[b.k];
-      elLine.textContent=b.d+(dest&&dest[0]===sm.sys&&dest[1]===sm.sel?' Deployment target.':'');
-      elMenu.innerHTML='<button data-sm="go">Deploy here</button><button data-sm="back">Back to the chart</button>';}
+    if(sm.level==='sector'){const i=sm.sel,st=STARS[i],ly=smDist(i),tg=dest&&dest[0]===i?' The deployment target is here.':'';
+      elWho.textContent=st.n+(i?' · '+ly+' LY':' · HOME');
+      elLine.textContent=st.d+(i?' Transit: '+Math.max(1,Math.round(ly*1.5))+' days at cruise.':' The Ironmonger is in orbit here.')+' Hazards: '+st.hz+tg;
+      elMenu.innerHTML='<button data-sm="go">Enter system</button><button data-sm="log">Ship\'s log</button><button data-sm="back">Back to the bridge</button>';
+    }else{const b=bodies(sm.sys)[sm.sel];elWho.textContent=b.n+' · '+KIND[b.k];
+      elLine.textContent=(b.un?'Unidentified contact. No transponder. Scan it to find out what it is.':b.d+(b.k==='ship'?'':b.sc?(b.anom?' Scanned. Anomaly on record.':' Scanned.'):' Not scanned.'))+(dest&&dest[0]===sm.sys&&dest[1]===sm.sel?' Deployment target.':'');
+      elMenu.innerHTML='<button data-sm="scan">'+(b.sc?'Scan results':'Scan')+'</button><button data-sm="go">Deploy here</button><button data-sm="log">Ship\'s log</button><button data-sm="back">Back to the chart</button>';}
     paintFocus();
   }else if(S.mode==='terminal'){
     elWho.textContent='REC TERMINAL';elLine.className='tw-line dim';elLine.style.minHeight='0';
@@ -349,6 +350,8 @@ elMenu.addEventListener('click',e=>{
   else if(d.term==='start')termStart();
   else if(d.term==='leave')termLeave();
   else if(d.sm==='go')smGo();
+  else if(d.sm==='scan')smScan();
+  else if(d.sm==='log')smLog();
   else if(d.sm==='back')smBack();
 });
 elMenu.addEventListener('pointerover',e=>{const b=e.target.closest('button');if(b&&b.dataset.t&&!dlg){S.focus=menuButtons().indexOf(b);paintFocus();}});
@@ -524,7 +527,7 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
 cv.addEventListener('click',e=>{
   if(dlg){advance();return;}
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;
-  if(S.mode==='starmap'){if(dragged){dragged=false;return;}if(S.sm.z!==(S.sm.level==='system'?1:0))return;let bi=-1,bd=20;smPts().forEach((q,i)=>{const dd=Math.hypot(q[0]-x,q[1]-y);if(dd<bd){bd=dd;bi=i;}});if(bi>=0){if(bi===S.sm.sel)smGo();else smSel(bi);}return;}
+  if(S.mode==='starmap'){if(dragged){dragged=false;return;}if(S.sm.z!==(S.sm.level==='system'?1:0))return;let bi=-1,bd=20;smPts().forEach((q,i)=>{const dd=Math.hypot(q[0]-x,q[1]-y);if(dd<bd){bd=dd;bi=i;}});if(bi>=0){if(bi!==S.sm.sel)smSel(bi);else if(S.sm.level==='sector')smGo();else smScan();}return;}
   if(S.mode!=='scene')return;
   const HH=hot();
   for(const id in HH){const [hx,hy,hw,hh]=HH[id];if(x>=hx&&x<hx+hw&&y>=hy&&y<hy+hh){S.hi=id;act(id);return;}}
@@ -544,37 +547,48 @@ const STARS=[
   {n:"TARN'S REST",c:'#b8c8ff',p:[-.65,-.5,-.35],d:'Graveyard orbit. Old hulls, cold and stripped.'},
   {n:'HALCYON DRIFT',c:'#9fe8ff',p:[.1,-.75,-.5],d:'Missing from the civilian chart. Someone added it by hand.'},
   {n:'CORVID STATION',c:'#d8c0ff',p:[-.2,.1,.85],d:'Listening post. No reply on any band.'}];
-const KIND={planet:'PLANET',moon:'MOON',station:'STATION',belt:'BELT',wreck:'WRECK',ship:'SHIP'};
+const KIND={planet:'PLANET',moon:'MOON',station:'STATION',belt:'BELT',wreck:'WRECK',ship:'SHIP',object:'OBJECT',contact:'CONTACT'};
+const HZ=['None. Home orbit.','Debris thrown from the tailings belt.','Flare activity between the two stars.','Ring debris. Strong radiation belts.',
+  'Traffic control is down. Uncontrolled hulls in the lanes.','Dense dust. Sensors unreliable past the second orbit.',
+  'Collision risk in the boneyard. The salvage warden may challenge.','Uncharted. No survey data.','None known. No reply from traffic control.'];
+STARS.forEach((st,i)=>st.hz=HZ[i]);
+// s: [atmosphere or composition, temperature, resources, life, signals]. unk: shows as an unidentified contact until scanned. anom: an anomaly, revealed by the scan.
 const BOD=[
-  [{n:'CINDER',k:'planet',r:.26,c:'#b0552e',d:'Scorched rock. Nothing lands here twice.'},
-   {n:'PALE ANCHOR II',k:'planet',r:.5,c:'#8fb3d9',d:'Ice world. A survey beacon still pings from the south pole.'},
+  [{n:'CINDER',k:'planet',r:.26,c:'#b0552e',d:'Scorched rock. Nothing lands here twice.',s:['None. Bare rock','430 C on the day side','Nickel, iron','None','None']},
+   {n:'LIFEBOAT 4',k:'wreck',unk:1,r:.38,c:'#ff8a66',d:'One of ours. Hatch open, seats empty.',s:['Composite hull, intact','-170 C','Rations for six, untouched','None','Distress loop. The voice cuts off mid-word']},
+   {n:'PALE ANCHOR II',k:'planet',r:.5,c:'#8fb3d9',d:'Ice world. A survey beacon still pings from the south pole.',s:['Thin nitrogen, methane frost','-140 C','Water ice, deuterium','Possible. Microbial traces under the ice','Survey beacon, automated, nine years old']},
    {n:'IRONMONGER',k:'ship',r:.68,c:'#b3bdcc',d:'Holding orbit, running lights on.'},
-   {n:'RELAY BUOY',k:'station',r:.88,c:'#5fd6c8',d:'Navigation buoy. Dormant.'}],
-  [{n:'BRASK PRIME',k:'planet',r:.3,c:'#c9925a',d:'A mining colony under a pressure dome.'},
-   {n:'HOLLOW MOON',k:'moon',r:.46,c:'#aab4c4',d:'Mined out to a shell. The lifts still run.'},
-   {n:'ORE PLATFORM',k:'station',r:.64,c:'#5fd6c8',d:'Refinery platform. Lights on, docks empty.'},
-   {n:'TAILINGS BELT',k:'belt',r:.86,c:'#b8a070',d:'Slag and spoil, thrown clear of the mines.'}],
-  [{n:'SLAG',k:'planet',r:.28,c:'#e0703a',d:'Molten on one face, frozen on the other.'},
-   {n:'EMBER DEPOT',k:'station',r:.55,c:'#5fd6c8',d:'Fuel depot. Tanks read full.'},
-   {n:'GATE WATCH',k:'moon',r:.8,c:'#9a8f88',d:'A captured rock with an outpost dug into it.'}],
-  [{n:'OURO',k:'planet',ring:1,r:.45,c:'#d98f4a',d:'Ringed giant. Charted once, never landed on.'},
-   {n:'OURO B',k:'moon',r:.62,c:'#7fb8d9',d:'Ocean moon, under the shadow of the rings.'},
-   {n:'RING SHEPHERD',k:'wreck',r:.82,c:'#ff8a66',d:'A derelict tug caught in the ring plane.'}],
-  [{n:'VANTANE',k:'planet',r:.36,c:'#6fbf8f',d:'Trade world. Green, crowded, loud on every band until recently.'},
-   {n:'HIGHDOCK',k:'station',r:.5,c:'#5fd6c8',d:'Orbital market. A thousand berths.'},
-   {n:'CUSTOMS BUOY',k:'station',r:.85,c:'#f0a63a',d:'It asks for papers. Nobody is listening to the answer.'}],
-  [{n:'SAFFRON',k:'planet',r:.34,c:'#e0b040',d:'Ochre storms from pole to pole.'},
-   {n:'DUST LANE',k:'belt',r:.6,c:'#c8a860',d:'Fine grit, thick enough to hide a hull.'},
-   {n:'UNKNOWN CONTACT',k:'wreck',r:.84,c:'#ff8a66',d:'Cold, tumbling, about the size of a ship.'}],
-  [{n:'TARN',k:'planet',r:.3,c:'#8a8fa0',d:'Dead rock. Everything else here orbits it out of habit.'},
-   {n:'THE BONEYARD',k:'belt',r:.56,c:'#9aa6b6',d:'Old hulls, cold and stripped.'},
-   {n:'WARDEN',k:'station',r:.82,c:'#5fd6c8',d:'Automated salvage warden. Still counting.'}],
-  [{n:'HALCYON',k:'planet',r:.42,c:'#4fb8a8',d:'Blue-green and unlisted.'},
-   {n:'UNLISTED SIGNAL',k:'station',r:.72,c:'#f0a63a',d:'A carrier wave with nothing on it.'}],
-  [{n:'ROOK',k:'planet',r:.34,c:'#8e9ab4',d:'Airless. Antenna fields from pole to pole.'},
-   {n:'CORVID STATION',k:'station',r:.62,c:'#5fd6c8',d:'Listening post. No reply on any band.'},
-   {n:'DEAD RELAY',k:'wreck',r:.86,c:'#ff8a66',d:'A relay with its dish torn off.'}]];
-const LBN=STARS.map(o=>o.n),SB=[];BOD.forEach(l=>{SB.push(LBN.length);l.forEach(b=>LBN.push(b.n));});const LB_SHIP=LBN.length;LBN.push('IRONMONGER');
+   {n:'RELAY BUOY',k:'station',r:.88,c:'#5fd6c8',d:'Navigation buoy. Dormant.',s:['Alloy shell, standard pattern','-200 C','None','None','Wakes when pinged. Says nothing']}],
+  [{n:'BRASK PRIME',k:'planet',r:.3,c:'#c9925a',d:'A mining colony under a pressure dome.',s:['Thin carbon dioxide, dust','-30 C','Iron, cobalt, rare earths','None native. The dome gardens are still green','Colony beacon, repeating a shift-change tone']},
+   {n:'HOLLOW MOON',k:'moon',r:.46,c:'#aab4c4',d:'Mined out to a shell. The lifts still run.',s:['None','-90 C','Mined out','None','Machinery hum from the core lifts'],anom:'Its mass reads a third too high for an empty shell. Something is still inside.'},
+   {n:'ORE PLATFORM',k:'station',r:.64,c:'#5fd6c8',d:'Refinery platform. Lights on, docks empty.',s:['Steel lattice, refinery stacks','-60 C','Refined ore, forty kilotons, unclaimed','None','Dock lights cycling. No hails']},
+   {n:'TAILINGS BELT',k:'belt',r:.86,c:'#b8a070',d:'Slag and spoil, thrown clear of the mines.',s:['Slag, silicate grit','-120 C','Trace metals','None','None']}],
+  [{n:'SLAG',k:'planet',r:.28,c:'#e0703a',d:'Molten on one face, frozen on the other.',s:['Vaporised rock','900 C by day, -180 C by night','Heavy metals, hard to reach','None','None']},
+   {n:'COURIER HULL',k:'wreck',unk:1,r:.41,c:'#ff8a66',d:'A fast courier, burned along one side.',s:['Composite hull, scorched','-170 C','A sealed dispatch case in the hold','None','None']},
+   {n:'EMBER DEPOT',k:'station',r:.57,c:'#5fd6c8',d:'Supply depot riding the gap between the stars.',s:['Tank farm, cryogenic','-250 C in the tanks','Stores, sealed and full','None','Berth guidance, automated, still polite']},
+   {n:'GATE WATCH',k:'moon',r:.8,c:'#9a8f88',d:'A captured rock with an outpost dug into it.',s:['None','-110 C','Nickel','None','Outpost transponder. The last crew log is one word: leaving']}],
+  [{n:'OURO',k:'planet',ring:1,r:.45,c:'#d98f4a',d:'Ringed giant. Charted once, never landed on.',s:['Hydrogen, helium, ammonia cloud','-150 C at the cloud tops','Helium-3','None detected','Radio storms, natural']},
+   {n:'OURO B',k:'moon',r:.62,c:'#7fb8d9',d:'Ocean moon, under the shadow of the rings.',s:['Thin oxygen off the ice','-160 C at the surface, liquid ocean below','Water, salts','Likely. Something moves under the ice','Low tones from the ocean, regular as breathing'],anom:'Straight lines under the ice, forty kilometres long. Somebody built them.'},
+   {n:'RING SHEPHERD',k:'wreck',unk:1,r:.82,c:'#ff8a66',d:'A derelict tug caught in the ring plane.',s:['Tug hull, intact','-190 C','Salvage: drive core, tether reels','None. Four suits, empty','Running lights still on']}],
+  [{n:'VANTANE',k:'planet',r:.36,c:'#6fbf8f',d:'Trade world. Green, crowded, loud on every band until recently.',s:['Nitrogen, oxygen. Breathable','18 C','Farmland, cities, markets','Yes. Dense. Quiet','Every channel open, nobody talking']},
+   {n:'HIGHDOCK',k:'station',r:.5,c:'#5fd6c8',d:'Orbital market. A thousand berths.',s:['Ring station, a thousand berths','20 C inside','Cargo, unclaimed','None that answers','Docking music, on a loop']},
+   {n:'CUSTOMS BUOY',k:'station',r:.85,c:'#f0a63a',d:'It asks for papers. Nobody is listening to the answer.',s:['Armoured buoy','-80 C','None','None','Demands papers. Accepts any reply']}],
+  [{n:'SAFFRON',k:'planet',r:.34,c:'#e0b040',d:'Ochre storms from pole to pole.',s:['Carbon dioxide, sulphur haze','60 C','Sulphur, glass sand','Possible. Spores carried on the storms','None']},
+   {n:'DUST LANE',k:'belt',r:.6,c:'#c8a860',d:'Fine grit, thick enough to hide a hull.',s:['Fine silicate, ionised','-100 C','Nothing worth the trip','None','Static']},
+   {n:'OBJECT NINE',k:'object',unk:1,r:.84,inc:1.25,fast:1,c:'#c79adf',d:'Smooth, dark, about the size of a ship.',s:['Unknown. It reflects nothing','No reading','Unknown','Unknown','One click per orbit'],anom:'It laps the star every few seconds. At that distance an orbit should take years.'}],
+  [{n:'TARN',k:'planet',r:.3,c:'#8a8fa0',d:'Dead rock. Everything else here orbits it out of habit.',s:['None','-200 C','Nothing left','None','None']},
+   {n:'THE BONEYARD',k:'belt',r:.56,c:'#9aa6b6',d:'Old hulls, cold and stripped.',s:['Hulls, hundreds of them, stripped','-210 C','Scrap alloy, a few intact drives','None','One hull is answering our ping'],anom:'The reply is in our own voice, a few seconds ahead of us.'},
+   {n:'WARDEN',k:'station',r:.82,c:'#5fd6c8',d:'Automated salvage warden. Still counting.',s:['Armed platform, old pattern','-150 C','None','None','Counting aloud. It has reached a very large number']}],
+  [{n:'HALCYON',k:'planet',r:.42,c:'#4fb8a8',d:'Blue-green and unlisted.',s:['Nitrogen, oxygen, water vapour','14 C','Forest, fresh water','Yes. Complex. Unclassified','None. Not one radio source on the whole world']},
+   {n:'THE STILL POINT',k:'object',unk:1,r:.72,still:1,c:'#c79adf',d:'A seamless shape the colour of the star behind it.',s:['Unknown alloy, seamless','Matches the star exactly','Unknown','Unknown','A carrier wave with nothing on it'],anom:'It is not in orbit. It hangs in place against the pull of the star, with no drive.'}],
+  [{n:'ROOK',k:'planet',r:.34,c:'#8e9ab4',d:'Airless. Antenna fields from pole to pole.',s:['None','-120 C','Silicon, copper','None','The antenna fields are still tracking something overhead']},
+   {n:'CORVID STATION',k:'station',r:.62,c:'#5fd6c8',d:'Listening post. No reply on any band.',s:['Listening post, shielded','19 C inside','Signal archives','Unclear. Heat for six, movement for none','No reply on any band']},
+   {n:'DEAD RELAY',k:'wreck',unk:1,r:.86,c:'#ff8a66',d:'A relay with its dish torn off.',s:['Relay bus, dish torn away','-180 C','None','None','Still transmitting'],anom:'It has no dish and no power. The message is tomorrow\'s date, repeated.'}]];
+const SCAN_TOTAL=BOD.reduce((n,l)=>n+l.filter(b=>b.k!=='ship').length,0);
+const scanned=(sy,i)=>!!S.flags.scans[sy+'-'+i];
+const bName=(sy,i)=>{const b=BOD[sy][i];return b.unk&&!scanned(sy,i)?'UNKNOWN CONTACT':b.n;};
+const orbP=(b,a)=>{const x=Math.cos(a)*b.r,z=Math.sin(a)*b.r,inc=b.inc||0;return [x,-Math.sin(inc)*z,Math.cos(inc)*z];};
+const LBN=STARS.map(o=>o.n),SB=[];BOD.forEach(l=>{SB.push(LBN.length);l.forEach(b=>LBN.push(b.n));});const LB_SHIP=LBN.length;LBN.push('IRONMONGER');const LB_UNK=LBN.length;LBN.push('UNKNOWN CONTACT');
 const BGS=[];for(let i=0;i<280;i++){const u=h2(i,31)*2-1,a=h2(31,i)*Math.PI*2,r=Math.sqrt(1-u*u),d=1.3+h2(i,57)*4.7;BGS.push([Math.cos(a)*r*d,u*d,Math.sin(a)*r*d]);}
 const BGF=[];for(let i=0;i<700;i++){const u=h2(i,83)*2-1,a=h2(83,i)*Math.PI*2,r=Math.sqrt(1-u*u),d=6.5+h2(i,91)*10;BGF.push([Math.cos(a)*r*d,u*d,Math.sin(a)*r*d]);}
 const m3mul=(a,b)=>{const o=[];for(let r=0;r<3;r++)for(let c=0;c<3;c++)o.push(a[r*3]*b[c]+a[r*3+1]*b[3+c]+a[r*3+2]*b[6+c]);return o;};
@@ -583,7 +597,8 @@ function m3rot(ax,an){const l=Math.hypot(ax[0],ax[1],ax[2])||1,x=ax[0]/l,y=ax[1]
   return [t*x*x+c,t*x*y-n*z,t*x*z+n*y,t*x*y+n*z,t*y*y+c,t*y*z-n*x,t*x*z-n*y,t*y*z+n*x,t*z*z+c];}
 function smRot(yaw,pitch){S.sm.m=m3mul(m3rot([0,1,0],yaw),m3mul(m3rot([1,0,0],pitch),S.sm.m));}
 const smDist=i=>(Math.hypot(...STARS[i].p)*40).toFixed(1);
-function bodies(sy){return BOD[sy].map((b,i)=>{const a=i*2.1+sy+now*.03/b.r;return Object.assign({},b,{p:[Math.cos(a)*b.r,0,Math.sin(a)*b.r]});});}
+function bodies(sy){return BOD[sy].map((b,i)=>{const sc=scanned(sy,i),un=!!b.unk&&!sc,a=i*2.1+sy+(b.still?0:now*(b.fast?1.4:.03/b.r));
+  return Object.assign({},b,{p:orbP(b,a),n:un?'UNKNOWN CONTACT':b.n,k:un?'contact':b.k,c:un?'#9aa6b6':b.c,un,sc});});}
 // everything in view space: the sphere's rotation applied, and the chosen star pulled to the centre as the zoom runs
 function smVecs(){
   const M=S.sm.m,z=S.sm.z,o=m3v(M,STARS[S.sm.sys].p);
@@ -596,10 +611,35 @@ function smSel(i){S.sm.sel=i;beep(760,.03);refreshUI();}
 function smGo(){
   const sm=S.sm;
   if(sm.level==='sector'){sm.sys=sm.sel;sm.level='system';sm.sel=0;beep(520,.25,'triangle',.07);refreshUI();return;}
-  const b=BOD[sm.sys][sm.sel];
+  const b=bodies(sm.sys)[sm.sel];
   if(b.k==='ship'){say([['','That is us.']]);return;}
   S.flags.dest=[sm.sys,sm.sel];beep(880,.2,'triangle',.08);
   say([['','Deployment target locked: '+b.n+', '+STARS[sm.sys].n+' system.'],['','The launch bay does not answer yet. This is where the away mission will start.']]);
+}
+function scanLabel(b){return (b.k==='planet'||b.k==='moon')?'ATMOSPHERE':'COMPOSITION';}
+function smScan(){
+  const sm=S.sm,sy=sm.sys,i=sm.sel,b=BOD[sy][i],D='DORIS';
+  if(b.k==='ship'){say([[D,'That is us. All decks reporting. Nobody answering.']]);return;}
+  const key=sy+'-'+i,first=!S.flags.scans[key],lines=[];
+  if(first){S.flags.scans[key]=1;S.flags.log.push(key);}
+  lines.push([D,!first?'Replaying the scan of '+b.n+'.':b.unk?'Contact resolved. '+b.n+'. '+b.d:'Scanning '+b.n+'.']);
+  lines.push([D,scanLabel(b)+': '+b.s[0]+'\nTEMPERATURE: '+b.s[1]]);
+  lines.push([D,'RESOURCES: '+b.s[2]+'\nLIFE: '+b.s[3]]);
+  lines.push([D,'SIGNALS: '+b.s[4]]);
+  if(b.anom)lines.push([D,'ANOMALY. '+b.anom]);
+  if(first)lines.push([D,'Recorded in the ship\'s log.']);
+  beep(980,.25,'sine',.06);say(lines);
+}
+function smLog(){
+  const L=S.flags.log.filter(k=>{const q=k.split('-');return BOD[q[0]]&&BOD[q[0]][q[1]];});
+  if(!L.length){say([['DORIS','The log is empty. Scan something and I will write it down.']]);return;}
+  const an=L.filter(k=>{const q=k.split('-');return BOD[q[0]][q[1]].anom;}).length;
+  const lines=[['DORIS','Ship\'s log. '+L.length+' of '+SCAN_TOTAL+' objects scanned, '+an+(an===1?' anomaly':' anomalies')+'. Newest first. B closes the log.']];
+  L.slice().reverse().forEach((k,n)=>{const q=k.split('-'),b=BOD[q[0]][q[1]],hd='LOG '+(n+1)+'/'+L.length+' · '+b.n;
+    lines.push([hd,STARS[q[0]].n+' system. '+KIND[b.k]+'.\n'+scanLabel(b)+': '+b.s[0]+'\nTEMPERATURE: '+b.s[1]]);
+    lines.push([hd,'RESOURCES: '+b.s[2]+'\nLIFE: '+b.s[3]+'\nSIGNALS: '+b.s[4]]);
+    if(b.anom)lines.push([hd,'ANOMALY. '+b.anom]);});
+  say(lines,null,true);
 }
 function smBack(){
   if(S.fadeDir)return;const sm=S.sm;
@@ -638,7 +678,10 @@ function drawBody(g,b,x,y){
   else if(b.k==='station'){R(g,c,x-1,y-3,3,7);R(g,c,x-3,y-1,7,3);}
   else if(b.k==='wreck'){for(let k=-2;k<=2;k++){R(g,c,x+k,y+k,1,1);R(g,c,x+k,y-k,1,1);}}
   else if(b.k==='belt'){R(g,c,x-2,y,2,2);R(g,c,x+1,y-2,2,2);R(g,c,x+2,y+2,1,1);}
+  else if(b.k==='contact'){for(let q=-3;q<=3;q++){const w=3-Math.abs(q);R(g,c,x-w,y+q,w*2+1,1);}R(g,'#02050b',x-1,y-1,3,3);}
+  else if(b.k==='object'){R(g,c,x-2,y-2,5,5);R(g,'#02050b',x-1,y-1,3,3);}
   else shipIcon(g,x,y);
+  if(b.sc&&b.anom){const v='#c79adf';R(g,v,x-8,y,2,1);R(g,v,x+7,y,2,1);R(g,v,x,y-8,1,2);R(g,v,x,y+7,1,2);}
 }
 function selBox(g,x,y,t){const k=8+(Math.floor(t*3)&1),A=P.amber;
   R(g,A,x-k,y-k,4,1);R(g,A,x-k,y-k,1,4);R(g,A,x+k-3,y-k,4,1);R(g,A,x+k,y-k,1,4);
@@ -673,7 +716,7 @@ function drawStarmap(g,t){
   }
   if(z>0){
     g.globalAlpha=z;const K=250*z,sy=S.sm.sys,st=STARS[sy],bs=bodies(sy);
-    bs.forEach(b=>{const n=b.k==='belt'?170:96;for(let k=0;k<n;k++){const a=k/n*Math.PI*2,q=scr(m3v(M,[Math.cos(a)*b.r,0,Math.sin(a)*b.r]),K);
+    bs.forEach(b=>{if(b.still)return;const n=b.k==='belt'?170:96;for(let k=0;k<n;k++){const a=k/n*Math.PI*2,q=scr(m3v(M,orbP(b,a)),K);
       if(b.k==='belt'){if(h2(k,7)<.7)R(g,'#8a7a5a',Math.round(q[0]+h2(k,3)*3-1),Math.round(q[1]+h2(3,k)*3-1),1,1);}
       else if(k&1)R(g,q[2]>0?'#1d5a60':'#0f2f38',Math.round(q[0]),Math.round(q[1]),1,1);}});
     const pts=V.sys.map((v,i)=>({i,q:scr(v,K)}));pts.push({i:-1,q:scr([0,0,0],K)});pts.sort((a,b)=>a.q[2]-b.q[2]);
@@ -687,7 +730,7 @@ function drawStarmap(g,t){
   }
   g.globalAlpha=1;g.textAlign='left';g.fillStyle='#2f8f90';
   g.fillText(S.sm.level==='sector'?'SECTOR CHART':STARS[S.sm.sys].n+' SYSTEM',10,8);g.fillText('DRAG OR D-PAD TO ROTATE',10,H-16);
-  g.textAlign='right';g.fillText(dest?'TARGET: '+BOD[dest[0]][dest[1]].n:'NO TARGET SET',W-10,8);g.textAlign='left';
+  g.textAlign='right';g.fillText(dest?'TARGET: '+bName(dest[0],dest[1]):'NO TARGET SET',W-10,8);g.fillText('SCANNED '+Object.keys(S.flags.scans).length+'/'+SCAN_TOTAL,W-10,H-16);g.textAlign='left';
   for(let y=0;y<H;y+=2)R(g,'rgba(0,0,0,.18)',0,y,W,1);
 }
 let bridgeArt=null;
@@ -966,7 +1009,7 @@ function pressA(){
 }
 function pressB(){
   if(S.fadeDir)return;
-  if(dlg){advance();return;}
+  if(dlg){if(dlg.esc){dlg=null;elMore.hidden=true;refreshUI();}else advance();return;}
   if(S.mode==='keypad'){S.mode='scene';refreshUI();}
   else if(S.mode==='scene')leaveCabin();
   else if(S.mode==='starmap')smBack();
@@ -1144,9 +1187,9 @@ function paintPanel(){
   g.font='20px Silkscreen, "Courier New", monospace';g.fillStyle='#f0a63a';g.fillText(elWho.textContent,28,20);
   const body='26px DotGothic16, "Courier New", monospace';
   g.font=body;g.fillStyle=elLine.classList.contains('dim')?'#8e9ab4':'#e8ebf4';
-  let y=54,ln='';
-  for(const w of elLine.textContent.split(' ')){const tt=ln?ln+' '+w:w;if(g.measureText(tt).width>712&&ln){g.fillText(ln,28,y);y+=34;ln=w;}else ln=tt;}
-  if(ln){g.fillText(ln,28,y);y+=34;}
+  let y=54;
+  elLine.textContent.split('\n').forEach(par=>{let ln='';for(const w of par.split(' ')){const tt=ln?ln+' '+w:w;if(g.measureText(tt).width>712&&ln){g.fillText(ln,28,y);y+=34;ln=w;}else ln=tt;}
+    if(ln){g.fillText(ln,28,y);y+=34;}});
   y+=8;
   if(dlg){if(!elMore.hidden){g.fillStyle='#f0a63a';g.fillText('▼',PW-52,PH-46);}return;}
   if(S.mode==='keypad'){
@@ -1161,8 +1204,8 @@ function paintPanel(){
       if(x.getAttribute('aria-pressed')==='true')R(g,'#2b3654',bx,by,cw,42);
       g.strokeStyle=on?'#f0a63a':'#2b3654';g.lineWidth=2;g.strokeRect(bx+1,by+1,cw-2,40);
       g.font=body;g.fillStyle=on?'#f0a63a':'#e8ebf4';g.fillText((on?'▶ ':'  ')+x.textContent,bx+8,by+7);});
-    if(S.mode==='explore'||S.mode==='starmap'){g.font='18px DotGothic16, "Courier New", monospace';g.fillStyle='#8e9ab4';
-      g.fillText(S.mode==='explore'?'Stick moves. Trigger or A acts. Grip or B backs out.':'Grip-drag or stick turns it. Point at a star or a button, trigger. B: back.',28,PH-40);}
+    if((S.mode==='explore'||S.mode==='starmap')&&y+Math.ceil(b.length/cols)*50<PH-44){g.font='18px DotGothic16, "Courier New", monospace';g.fillStyle='#8e9ab4';
+      g.fillText(S.mode==='explore'?'Stick moves. Trigger or A acts. Grip or B backs out.':'Grip-drag or stick turns it. Point and trigger to pick. B: back.',28,PH-40);}
   }
 }
 function prepGL(t){
@@ -1229,12 +1272,13 @@ function drawHolo(vp,vw,t,f){
   }
   if(z>0){
     const a=z*f,k=SMR2*z,sy=S.sm.sys,bs=bodies(sy),sc=hx(STARS[sy].c);
-    const oq=[];bs.forEach(b=>plane(oq,SMC,AX[0],AX[2],k*b.r/.977));drawQuads(GLR.tCirc,oq,vp,[.25*a,.8*a,.78*a,.45],0);
+    const oq=[];bs.forEach(b=>{if(b.still)return;const ci=Math.cos(b.inc||0),si=Math.sin(b.inc||0);plane(oq,SMC,AX[0],[AX[2][0]*ci-AX[1][0]*si,AX[2][1]*ci-AX[1][1]*si,AX[2][2]*ci-AX[1][2]*si],k*b.r/.977);});drawQuads(GLR.tCirc,oq,vp,[.25*a,.8*a,.78*a,.45],0);
     const s1=[];bill(s1,SMC,.1*z);drawQuads(GLR.tGlow,s1,vp,[sc[0]*a,sc[1]*a,sc[2]*a,1],0);
     const s2=[];bill(s2,SMC,.035*z);drawQuads(GLR.tGlow,s2,vp,[a,a,a,1],0);
     const lb=[];
     V.sys.forEach((v,i)=>{const b=bs[i],w=wS(v,k),c=hx(b.c),g1=[],kk=b.k==='planet'?.03:.02;bill(g1,w,kk);bill(g1,w,kk*.4);
-      drawQuads(GLR.tGlow,g1,vp,[c[0]*a,c[1]*a,c[2]*a,1],0);lab(lb,w,SB[sy]+i);
+      drawQuads(GLR.tGlow,g1,vp,[c[0]*a,c[1]*a,c[2]*a,1],0);lab(lb,w,b.un?LB_UNK:SB[sy]+i);
+      if(b.sc&&b.anom){const an=[];bill(an,w,.05+.012*Math.sin(t*4));drawQuads(GLR.tGlow,an,vp,[.78*a,.6*a,.87*a,.7],0);}
       if(dest&&dest[0]===sy&&dest[1]===i){const fl=[];seg(fl,w,P(w,0,.05),.002);drawQuads(GLR.tGlow,fl,vp,[AMB[0]*a,AMB[1]*a,AMB[2]*a,1],0);}
       if(S.sm.level==='system'&&i===S.sm.sel)selPos=w;});
     drawQuads(GLR.tLbl,lb,vp,[.35*a,.85*a,.85*a,1],0);
@@ -1347,7 +1391,8 @@ function glShot(w,h){
 /* ---------- boot ---------- */
 function start(data){
   if(data&&data.flags){Object.assign(S.flags,data.flags);if(data.p){S.p.x=data.p.x;S.p.y=data.p.y;S.p.dir=data.p.dir||'down';}S.seenCabin=!!data.seenCabin;S.seenBridge=!!data.seenBridge;}
-  if(!Array.isArray(S.flags.dest))S.flags.dest=null;
+  if(!Array.isArray(S.flags.dest)||!BOD[S.flags.dest[0]]||!BOD[S.flags.dest[0]][S.flags.dest[1]])S.flags.dest=null;
+  if(!S.flags.scans||typeof S.flags.scans!=='object')S.flags.scans={};if(!Array.isArray(S.flags.log))S.flags.log=[];
   S.sm.m=m3rot([1,0,0],.35);
   buildTiles();refreshUI();
   if(!(data&&data.flags))say([[F,'Deck 3. Crew quarters and the rec room.'],[F,'Nobody home.']]);
@@ -1363,7 +1408,7 @@ if(document.fonts&&document.fonts.load){
   Promise.all([document.fonts.load('8px Silkscreen'),document.fonts.load('700 24px Silkscreen')]).then(go,go);
   setTimeout(go,1500);
 }else go();
-window.__ironmonger={panelHit,btns:()=>GLR.btn,smRot,smGo,smBack,smSel,S,say,advance,pressA,pressB,keys,glShot,refreshUI};
+window.__ironmonger={smScan,smLog,panelHit,btns:()=>GLR.btn,smRot,smGo,smBack,smSel,S,say,advance,pressA,pressB,keys,glShot,refreshUI};
 })();
 </script>
 
