@@ -965,7 +965,8 @@ function pressA(){
   else{const b=menuButtons()[S.focus];if(b)b.click();}
 }
 function pressB(){
-  if(S.fadeDir||dlg)return;
+  if(S.fadeDir)return;
+  if(dlg){advance();return;}
   if(S.mode==='keypad'){S.mode='scene';refreshUI();}
   else if(S.mode==='scene')leaveCabin();
   else if(S.mode==='starmap')smBack();
@@ -994,7 +995,7 @@ function held(){
       const ax=gp.axes,b=gp.buttons,on=i=>b[i]&&b[i].pressed;
       const sx=(ax.length>=4?ax[2]:ax[0])||0,sy=(ax.length>=4?ax[3]:ax[1])||0;
       if(sx<-.5)h.left=1;if(sx>.5)h.right=1;if(sy<-.5)h.up=1;if(sy>.5)h.down=1;
-      if(on(0)||on(4))A=1;if((on(1)&&S.mode!=='starmap')||on(5))B=1;}
+      if(on(0)||on(4))A=1;if((on(1)&&S.mode!=='starmap')||on(5)||(on(3)&&S.mode==='starmap'))B=1;}
     if(A&&!gpA)pressA();if(B&&!gpB)pressB();gpA=A;gpB=B;return h;}
   try{const gps=navigator.getGamepads?navigator.getGamepads():[];
     for(const gp of gps){if(!gp)continue;
@@ -1129,7 +1130,7 @@ function initGL(){
   const sph=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sph);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(sv),gl.STATIC_DRAW);
   const sprC=mk(128,64),fxC=mk(W,H),panC=mk(768,320);
   GLR={um:gl.getUniformLocation(pr,'m'),ut:gl.getUniformLocation(pr,'t'),uc:gl.getUniformLocation(pr,'c'),
-    world,worldN:vb.length/5,dyn:gl.createBuffer(),tAtlas:tex(AT),tGlow:tex(glow,true),tRing:tex(ringC,true),tCirc:tex(circC,true),tGrid:tex(gridC,true),sph,sphN:sv.length/5,tShip:tex(shipC),tLbl:tex(lbC,true),hands:[],rays:[],grab:{},
+    world,worldN:vb.length/5,dyn:gl.createBuffer(),tAtlas:tex(AT),tGlow:tex(glow,true),tRing:tex(ringC,true),tCirc:tex(circC,true),tGrid:tex(gridC,true),sph,sphN:sv.length/5,tShip:tex(shipC),tLbl:tex(lbC,true),hands:[],rays:[],grab:{},btn:[],
     sprC,sprG:sprC.getContext('2d'),tSpr:tex(sprC),fxC,fxG:fxC.getContext('2d'),tFx:tex(fxC),
     panC,panG:panC.getContext('2d'),tPan:tex(panC,true),tPic:tex(cv),
     tSpace:tex(fxC),tShell:tex(fxC),tDesk:tex(fxC),tNear:tex(fxC),cab:null,fxSig:'',panSig:'',
@@ -1137,7 +1138,7 @@ function initGL(){
   return true;
 }
 function paintPanel(){
-  const g=GLR.panG,PW=768,PH=320;
+  const g=GLR.panG,PW=768,PH=320;GLR.btn=[];
   R(g,'#0b1130',0,0,PW,PH);R(g,'#e8ebf4',0,0,PW,4);R(g,'#e8ebf4',0,PH-4,PW,4);R(g,'#e8ebf4',0,0,4,PH);R(g,'#e8ebf4',PW-4,0,4,PH);
   g.textBaseline='top';g.textAlign='left';
   g.font='20px Silkscreen, "Courier New", monospace';g.fillStyle='#f0a63a';g.fillText(elWho.textContent,28,20);
@@ -1156,12 +1157,12 @@ function paintPanel(){
     g.fillText('Stick left and right picks a digit, up and down changes it.',28,y+84);g.fillText('Trigger or A enters. Grip or B backs out.',28,y+110);
   }else{
     const b=menuButtons(),cols=S.mode==='scene'?3:2,cw=(712-(cols-1)*10)/cols;
-    b.forEach((x,i)=>{const bx=28+(i%cols)*(cw+10),by=y+Math.floor(i/cols)*50,on=i===S.focus;
+    b.forEach((x,i)=>{const bx=28+(i%cols)*(cw+10),by=y+Math.floor(i/cols)*50,on=i===S.focus;GLR.btn.push([bx,by,cw,42]);
       if(x.getAttribute('aria-pressed')==='true')R(g,'#2b3654',bx,by,cw,42);
       g.strokeStyle=on?'#f0a63a':'#2b3654';g.lineWidth=2;g.strokeRect(bx+1,by+1,cw-2,40);
       g.font=body;g.fillStyle=on?'#f0a63a':'#e8ebf4';g.fillText((on?'▶ ':'  ')+x.textContent,bx+8,by+7);});
     if(S.mode==='explore'||S.mode==='starmap'){g.font='18px DotGothic16, "Courier New", monospace';g.fillStyle='#8e9ab4';
-      g.fillText(S.mode==='explore'?'Stick moves. Trigger or A acts. Grip or B backs out.':'Stick or grip-drag turns it. Point and trigger to pick. B: back.',28,PH-40);}
+      g.fillText(S.mode==='explore'?'Stick moves. Trigger or A acts. Grip or B backs out.':'Grip-drag or stick turns it. Point at a star or a button, trigger. B: back.',28,PH-40);}
   }
 }
 function prepGL(t){
@@ -1239,9 +1240,26 @@ function drawHolo(vp,vw,t,f){
     drawQuads(GLR.tLbl,lb,vp,[.35*a,.85*a,.85*a,1],0);
   }
   if(selPos){const se=[];bill(se,selPos,.055+.01*Math.sin(t*6));drawQuads(GLR.tGlow,se,vp,[AMB[0]*f,AMB[1]*f,AMB[2]*f,.75],0);}
-  if(GLR.rays.length){const ra=[],hs=[];GLR.rays.forEach(r=>{seg(ra,r.o,[r.o[0]+r.d[0]*r.len,r.o[1]+r.d[1]*r.len,r.o[2]+r.d[2]*r.len],.0015);bill(hs,r.o,.018);});
-    drawQuads(GLR.tGlow,ra,vp,[.3*f,.85*f,.8*f,.5],0);drawQuads(GLR.tGlow,hs,vp,[.4*f,.9*f,.85*f,.9],0);}
   gl.disable(gl.BLEND);gl.depthMask(true);
+}
+// where a controller ray meets the text panel, in panel pixels
+function panelHit(o,d){
+  const c=Math.cos(.45),n=Math.sin(.45),rot=v=>[v[0],c*v[1]-n*v[2],n*v[1]+c*v[2]];
+  const lo=rot([o[0],o[1]+.62,o[2]+1.2]),ld=rot(d);if(Math.abs(ld[2])<1e-6)return null;
+  const t=-lo[2]/ld[2];if(t<=0)return null;const x=lo[0]+ld[0]*t,y=lo[1]+ld[1]*t;
+  if(Math.abs(x)>.55||Math.abs(y)>.23)return null;
+  return {t,px:(x+.55)/1.1*768,py:(.23-y)/.46*320};
+}
+function drawRays(vp,vw,f){
+  if(!GLR.rays.length)return;
+  const rt=[vw[0],vw[4],vw[8]],upv=[vw[1],vw[5],vw[9]],bk=[vw[2],vw[6],vw[10]],ra=[],hs=[];
+  GLR.rays.forEach(r=>{const p=r.o,q=[p[0]+r.d[0]*r.len,p[1]+r.d[1]*r.len,p[2]+r.d[2]*r.len],d=r.d;
+    let nn=[d[1]*bk[2]-d[2]*bk[1],d[2]*bk[0]-d[0]*bk[2],d[0]*bk[1]-d[1]*bk[0]];const l=Math.hypot(nn[0],nn[1],nn[2])||1,w=.0015;nn=[nn[0]/l*w,nn[1]/l*w,nn[2]/l*w];
+    qpush(ra,[p[0]-nn[0],p[1]-nn[1],p[2]-nn[2]],[p[0]+nn[0],p[1]+nn[1],p[2]+nn[2]],[q[0]+nn[0],q[1]+nn[1],q[2]+nn[2]],[q[0]-nn[0],q[1]-nn[1],q[2]-nn[2]],[28,28,8,8],64,64);
+    [p,q].forEach((c,i)=>{const k=i?.012:.018,Q=(x,y)=>[c[0]+(rt[0]*x+upv[0]*y)*k,c[1]+(rt[1]*x+upv[1]*y)*k,c[2]+(rt[2]*x+upv[2]*y)*k];qpush(hs,Q(-1,1),Q(1,1),Q(1,-1),Q(-1,-1),[0,0,64,64],64,64);});});
+  gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE);gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+  drawQuads(GLR.tGlow,ra,vp,[.3*f,.85*f,.8*f,.6],0);drawQuads(GLR.tGlow,hs,vp,[.4*f,.9*f,.85*f,.9],0);
+  gl.disable(gl.BLEND);gl.depthMask(true);gl.enable(gl.DEPTH_TEST);
 }
 function drawGL(vp,t,vw){
   const f=1-(S.fade>0?Math.ceil(S.fade*4)/4:0),white=[f,f,f,1];
@@ -1273,24 +1291,28 @@ function drawGL(vp,t,vw){
   const pa=[];qpush(pa,[-.55,.23,0],[.55,.23,0],[.55,-.23,0],[-.55,-.23,0],[0,0,768,320],768,320);
   drawQuads(GLR.tPan,pa,mmul(vp,S.mode==='explore'?mT(0,.14,-1.5):mmul(mT(0,-.62,-1.2),mRX(-.45))),[1,1,1,1],0);
   if(S.mode==='starmap')drawHolo(vp,vw,t,f);
+  drawRays(vp,vw,f);
 }
 function xrFrame(time,frame){
   if(!xrS)return;xrS.requestAnimationFrame(xrFrame);
   const t=time/1000,dt=Math.min(.05,t-xlast||0);xlast=t;now=t;
   GLR.rays=[];
-  if(S.mode==='starmap'&&!dlg&&!S.fadeDir){try{
-    const settled=S.sm.z===(S.sm.level==='system'?1:0),WP=settled?smWorldPts():[];let hit=-1,ba=.06;
+  if(S.mode!=='explore'&&!S.fadeDir){try{
+    const inMap=S.mode==='starmap'&&!dlg,settled=S.sm.z===(S.sm.level==='system'?1:0),WP=inMap&&settled?smWorldPts():[];let hit=-1,ba=.06,bhit=-1;
     for(const src of xrS.inputSources){const sp=src.targetRaySpace;if(!sp)continue;const ps=frame.getPose(sp,xrRef);if(!ps)continue;
       const m=ps.transform.matrix,o=[m[12],m[13],m[14]],d=[-m[8],-m[9],-m[10]];let len=1.6;
-      WP.forEach((w,i)=>{const r=[w[0]-o[0],w[1]-o[1],w[2]-o[2]],tt=r[0]*d[0]+r[1]*d[1]+r[2]*d[2];if(tt<.03)return;
+      const ph=panelHit(o,d);
+      if(ph){len=ph.t;if(!dlg)GLR.btn.forEach((r,i)=>{if(ph.px>=r[0]&&ph.px<=r[0]+r[2]&&ph.py>=r[1]&&ph.py<=r[1]+r[3])bhit=i;});}
+      else WP.forEach((w,i)=>{const r=[w[0]-o[0],w[1]-o[1],w[2]-o[2]],tt=r[0]*d[0]+r[1]*d[1]+r[2]*d[2];if(tt<.03)return;
         const an=Math.hypot(r[0]-d[0]*tt,r[1]-d[1]*tt,r[2]-d[2]*tt)/tt;if(an<ba){ba=an;hit=i;len=tt;}});
       GLR.rays.push({o,d,len});
-      const gp=src.gamepad,sq=gp&&gp.buttons[1]&&gp.buttons[1].pressed,key=src.handedness||'x';
+      const gp=src.gamepad,sq=inMap&&gp&&gp.buttons[1]&&gp.buttons[1].pressed,key=src.handedness||'x';
       if(sq){const pv=GLR.grab[key];if(pv){const a=[pv[0]-SMC[0],pv[1]-SMC[1],pv[2]-SMC[2]],b=[o[0]-SMC[0],o[1]-SMC[1],o[2]-SMC[2]];
           const cx=[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],sl=Math.hypot(cx[0],cx[1],cx[2]),dp=a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
           if(sl>1e-7)S.sm.m=m3mul(m3rot(cx,Math.atan2(sl,dp)*2.2),S.sm.m);}
         GLR.grab[key]=o;}else delete GLR.grab[key];}
-    if(hit>=0&&hit!==S.sm.sel)smSel(hit);
+    if(bhit>=0){if(bhit!==S.focus){S.focus=bhit;paintFocus();beep(600,.02);}}
+    else if(hit>=0&&hit!==S.sm.sel)smSel(hit);
   }catch(e){}}
   update(dt);
   const pose=frame.getViewerPose(xrRef);if(!pose)return;
@@ -1341,7 +1363,7 @@ if(document.fonts&&document.fonts.load){
   Promise.all([document.fonts.load('8px Silkscreen'),document.fonts.load('700 24px Silkscreen')]).then(go,go);
   setTimeout(go,1500);
 }else go();
-window.__ironmonger={smRot,smGo,smBack,smSel,S,say,advance,pressA,pressB,keys,glShot,refreshUI};
+window.__ironmonger={panelHit,btns:()=>GLR.btn,smRot,smGo,smBack,smSel,S,say,advance,pressA,pressB,keys,glShot,refreshUI};
 })();
 </script>
 
