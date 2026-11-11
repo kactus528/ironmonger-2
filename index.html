@@ -607,8 +607,9 @@ function smBack(){
 }
 function actBridge(id){
   if(id==='starmap'){
-    if(S.verb==='look'){say([[F,'A projection table. A slow cloud of stars turns above it, each one tagged in tiny amber type.']]);return;}
-    fadeTo(()=>{S.mode='starmap';S.hi=null;S.sm.level='sector';S.sm.z=0;S.sm.sel=0;refreshUI();});return;
+    const open=()=>fadeTo(()=>{S.mode='starmap';S.hi=null;S.sm.level='sector';S.sm.z=0;S.sm.sel=0;refreshUI();});
+    if(S.verb==='look')say([[F,'A projection table. I step up to it and the stars come up around me.']],open);else open();
+    return;
   }
   const L={viewport:'Open space, dead ahead. A violet nebula smears the dark like a thumbprint.',
     helm:'Two helm stations. Both seats pushed back, as if they stood up together.',
